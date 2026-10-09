@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { normalize, enrichClaude, plan, preview, send } from '../lib/notify.mjs';
 
-const help = `harness-notify：统一任务完成推送（Node.js 22+）
+const help = `harness-notify：统一任务完成推送（Bark、Telegram、飞书 CLI、ntfy；Node.js 22+）
   init                    创建私有配置，不覆盖已有文件
   send --harness NAME --message TEXT [--event-id ID] [--dry-run]
   hook --harness NAME [JSON] [--dry-run]  也可从 stdin 读取 JSON

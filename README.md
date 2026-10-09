@@ -1,8 +1,8 @@
 # harness-notify
 
-一个命令，通过 harness 的完成 hook 推送到 Telegram、飞书 CLI、iOS Bark。每个 harness 可选择不同渠道与接收人，也可同时推送多个目标。Node.js 22+，零第三方依赖，无常驻服务。
+统一完成通知命令：Codex、Claude Code、DSH 的完成 hook 调用一次，按配置发送到 Bark、Telegram、飞书 CLI 或 ntfy。每个 harness 可选择不同渠道与接收人，也可同时发送多个渠道。Node.js 22+，零第三方依赖，无常驻服务。
 
-通知表示一轮回复结束，不代表代码检查、部署或业务验收成功。
+通知包含 **harness 名称、完整工作路径、会话标识、完成摘要**。摘要取最终回复摘录，最多 **1000 个 Unicode 字符**；不额外调用模型生成摘要。一轮回复结束不代表测试、部署或业务验收成功。
 
 ## 安装
 
@@ -13,119 +13,166 @@ node scripts/install.mjs
 harness-notify init
 ```
 
-`scripts/install.mjs` 在 `~/.local/bin` 创建命令软链，不覆盖已有其他命令。确保该目录位于 PATH；仓库需保留在当前路径。
+命令软链位于 `~/.local/bin/harness-notify`，确保该目录在 PATH。安装器不覆盖已有其他命令；仓库需保留在当前路径。`init` 创建权限 `600` 的私有配置，默认关闭通知，不覆盖已有文件。
 
-## 私有配置
+## 先用 Bark 跑通
 
-默认路径：`~/.config/harness-notify/config.json`。`init` 创建权限 `600` 的配置，默认 `enabled: false`，不覆盖已有文件。按需要填入渠道信息后改为 `true`。仓库只放无凭据示例：[examples/config.json](examples/config.json)。
+在 iOS Bark App 复制推送地址，例如 `https://api.day.app/设备key/`。`server` 填服务器根地址，`deviceKey` 只填设备 key。编辑 `~/.config/harness-notify/config.json`：
 
 ```json
 {
   "enabled": true,
-  "includeSummary": false,
-  "timeoutMs": 8000,
+  "includeSummary": true,
   "channels": {
-    "phone": {
-      "type": "bark",
-      "server": "https://api.day.app",
-      "deviceKey": "env:BARK_DEVICE_KEY",
-      "group": "harness"
-    },
-    "tg": {
-      "type": "telegram",
-      "botToken": "env:TELEGRAM_BOT_TOKEN",
-      "chatId": "env:TELEGRAM_CHAT_ID"
-    },
-    "feishu": {
-      "type": "feishu",
-      "cli": "lark-cli",
-      "identity": "user",
-      "userId": "env:FEISHU_USER_ID"
-    }
+    "phone": { "type": "bark", "server": "https://api.day.app", "deviceKey": "在私有配置填写设备key" }
   },
   "routes": {
-    "codex": ["phone", "tg"],
+    "codex": ["phone"],
     "claude": ["phone"],
-    "dsh": ["feishu"],
+    "dsh": ["phone"],
     "*": []
   }
 }
 ```
 
-- `env:变量名` 从调用进程环境读取。也可把具体值直接写入上述私有配置。桌面 harness 不一定继承终端的环境变量，建议直接写私有配置或从启动环境注入。
-- Telegram：创建 Bot 并先与它聊天；`botToken` 为 Bot Token，`chatId` 为私聊、群或频道 ID。使用文本消息，不解析 Markdown。
-- Bark：`deviceKey` 来自 iOS Bark App 的推送地址最后一段；`server` 是服务器根地址，不能包含设备 key。支持自建 HTTPS 服务。
-- 飞书：本机安装、登录 `lark-cli`；`identity` 明确选择 `user` 或 `bot`；`userId` 使用 `ou_...`，群聊改用 `chatId: "oc_..."`，两者只能填一个。`cli` 可设为完整可执行路径，便于桌面进程找到它。
-- 为不同接收人创建多个同类型 channel，再按 harness 路由。相同 route 中重复 channel 只发送一次。`*` 是未知 harness 的默认路由；显式 `[]` 关闭该 harness。
-- 通知正文包含 Harness 名称、完整工作路径、会话标识及完成摘要；手动 `send` 使用当前命令目录，完成 hook 使用 harness 提供的 `cwd`。
-- `includeSummary: false` 默认不发送最终回复正文；设为 `true` 后，以最终回复摘录作为完成摘要（最多 1000 字符，按 Unicode 字符计数，emoji 不截成半个字符）。不发送用户输入、思考内容或完整 transcript；没有最终回复时明确显示“未提供最终回复”。
-- `timeoutMs` 每次 HTTP/CLI 调用的超时，范围 `100–15000`。Telegram 总文本最多 3800 字符，Bark 正文最多 3000 字符。
-
-不要把真实配置、Bot Token、Bark key、接收人及状态文件加入 public 仓库。启用摘要会把最终回复发到你选择的平台。
-
-## 统一发送命令
+已有配置时合并字段，保留其他渠道与路由。真实 key 不放命令行、README 或 Git。
 
 ```bash
-# 预演：不访问网络、不调用飞书 CLI、不写状态
-harness-notify send --harness codex --message '任务完成，请查看结果' --dry-run
-
-# 真实推送
-harness-notify send --harness codex --message '任务完成，请查看结果'
-
-# 重复调用同一 event-id，只尝试发送一次
-harness-notify send --harness dsh --message '检查完成' --event-id 'session-123-turn-4'
-```
-
-不指定 `--event-id` 时，每次手动 send 都是新事件。支持 `--config PATH` / `HARNESS_NOTIFY_CONFIG`、`--state-dir PATH` / `HARNESS_NOTIFY_STATE_DIR`，默认遵循 `XDG_CONFIG_HOME`、`XDG_STATE_HOME`。
-
-## 一次接入三个 harness
-
-```bash
+# 无发送、无状态修改
+harness-notify send --harness codex --message '通知链路测试' --dry-run
 harness-notify install-hooks --dry-run
+# 写入三套 hook，先备份、保留原有配置
 harness-notify install-hooks --apply
+# 向选中的渠道发送一次；本次测试 ID 不重复使用
+harness-notify send --harness codex --message '通知链路测试' --event-id '你的唯一测试ID'
 ```
 
-安装器会先备份再修改；不删除备份。保留所有无关配置，重复运行不添加重复 hook。`--dry-run` 优先于 `--apply`。
+安装后按各 harness 的机制重载配置。脚本不杀进程、不自动重启。
 
-| Harness | 接入位置 | 触发点 |
+通知示例：
+
+```text
+Codex · 一轮任务结束
+Harness：Codex
+路径：/你的项目/完整工作目录
+会话：对应会话标识
+完成摘要：修复登录问题，检查通过。
+```
+
+## Agent skill
+
+附带 [weicoz-harness-notify](skills/weicoz-harness-notify/SKILL.md)，用于让 agent 安装、配置、验证、排查完成推送。skill 用于操作此工具，实际通知由 hook 触发，不会默认对每次聊天额外再发一条。
+
+```bash
+node scripts/install-skill.mjs --dry-run
+node scripts/install-skill.mjs --apply
+```
+
+技能维护源放在 `~/.skills-manager/skills/weicoz-harness-notify/`，发现入口为 `~/.agents/skills/weicoz-harness-notify` 软链。脚本幂等，不覆盖不同内容或不同来源的入口。重载 harness 后可调用 `$weicoz-harness-notify`，例如“给 DSH 配置 Bark 并验证自动完成推送”。维护及分发约定见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
+## 渠道配置
+
+完整无凭据示例：[examples/config.json](examples/config.json)。`channels` 中每个键是一条独立渠道；`routes` 中每个 harness 对应渠道名称数组。
+
+| 渠道 | 字段 | 成功判定 |
 |---|---|---|
-| Codex | `~/.codex/config.toml` 的 `notify` | `agent-turn-complete`，通过参数传 JSON |
-| Claude Code | `~/.claude/settings.json` 的 `hooks.Stop` | 主 agent 的 Stop，通过 stdin 传 JSON |
-| DSH | `~/.dsh/cordis.patch.yml` | 本地适配器监听已提交 `session/event` 的 `turn/end`，仅 `reason.kind: completed` |
+| Bark | type=bark，server，deviceKey；group 可选 | API code=200 |
+| Telegram | type=telegram，botToken，chatId；server 可选 | API ok=true 且返回消息 ID |
+| 飞书 | type=feishu，identity=user 或 bot；userId 或 chatId 二选一，cli 可选 | 发送返回 ID，再回读校验 ID、正文、deleted=false |
+| ntfy | type=ntfy，server，topic；token 可选 | 返回 message 事件、消息 ID、相同 topic |
 
-Codex 适配器会串联原 `notify` 程序；原程序和参数存于私有 `~/.config/harness-notify/codex-forward.json`，不进入本仓库。原程序先调用，任务通知随后调用；各自失败不会阻断另一方。安装器自动处理双引号字符串数组（可带末尾逗号），复杂 TOML 不猜改。
+- Telegram 用户需先与 Bot 聊天；群、频道需给予 Bot 发布权限。消息为纯文本，不解析 Markdown。
+- 飞书需安装并登录 `lark-cli`。私聊 userId 为 `ou_...`，群聊 chatId 为 `oc_...`。桌面环境建议 cli 使用绝对路径。
+- ntfy 手机 App 订阅的 server/topic 必须与发布配置相同，详情见下节。
+- 多个接收人可创建多个同类型渠道，再放进路由；同一数组中重复渠道只发送一次。
+- `[]` 关闭对应 harness；`*` 是未知 harness 的默认路由，路由键区分大小写。
 
-安装后重新启动相应 harness 或按其机制重载配置；安装器不杀进程、不自动重启。DSH 适配器针对已核对的 `0.2.0-rc.2` 事件 API，挂在全局 patch，覆盖加载该 patch 的 profiles。既有插件若使 profile 无法启动，需要另行修复，不要为通知绕过版本限制。
+开关与凭据：
 
-Claude 的 Stop 位于其他 Stop hook 的续跑决策之前，因此其他 hook 阻止结束时可能收到一次提前通知；续跑后的最终 Stop 仍可通知。它不等价于业务最终完成。默认用最近用户消息 UUID 区分轮次；旧版本既没有 prompt id、又无法读取 transcript 时，回退为会话与最终回复去重，此时不同轮次的完全相同回复可能只通知一次。
+| 字段 | 含义 |
+|---|---|
+| enabled | false 时不发送、不写发送状态 |
+| includeSummary | 默认 false；true 时发送最终回复摘录，最多1000字符；缺正文时显示“未提供最终回复” |
+| timeoutMs | 每次 HTTP/CLI 调用超时，默认8000，范围100–15000 |
+| env:变量名 | 读取调用进程环境变量；也可直接在私有 JSON 填值 |
 
-## 手工 hook 与其他 harness
+桌面 harness 不保证继承终端环境变量。凭据只存私有配置，保持权限 `600`；不要把真实配置、接收人、topic、Token、状态或日志加入 public 仓库。启用摘要会将最终回复摘录发到所选平台。路径取 hook 的 cwd；手动 send 使用命令当前目录。Telegram 总文本最多3800字符，Bark/ntfy正文最多3000字符；摘要自身最多1000字符。
 
-Codex 无既有 `notify` 时可直接配置：
+## 接入 ntfy
+
+通过 HTTP JSON 发布，不需要本机安装 ntfy CLI。手机 App 先订阅同一 server 与 topic，在私有配置的 channels 添加：
+
+```json
+{
+  "ntfyPhone": {
+    "type": "ntfy",
+    "server": "https://ntfy.sh",
+    "topic": "env:NTFY_TOPIC"
+  }
+}
+```
+
+自建服务填它的 HTTPS 根地址。按 [官方 JSON 发布协议](https://docs.ntfy.sh/publish/#publish-as-json)，请求 POST 到服务器根地址，topic 在正文，不将订阅地址作为 server。
+
+需要认证时添加 `"token": "env:NTFY_TOKEN"` 或在私有文件直接填 Token。Token 在 [ntfy 网页 Account](https://ntfy.sh/account) 登录后进入 **Access tokens** 创建；它是账号发布凭据，手机“允许通知”只控制接收提醒。参考 [官方 Token 说明](https://docs.ntfy.sh/publish/#access-tokens)。配置了 token 但值缺失时在发送前失败，不自动回退匿名。
+
+公开且未保护的 topic 名称相当于共享口令；使用难猜名称并保存在私有配置，或使用有访问控制的 topic。给请求附带 Token 不会自动把一个公开 topic 变成私有 topic；访问权限需在服务端或账号设置核对。
+
+路由选择：
+
+```json
+{
+  "codex": ["phone", "ntfyPhone"],
+  "claude": ["phone", "ntfyPhone"],
+  "dsh": ["phone", "ntfyPhone"]
+}
+```
+
+上例同时发送 Bark 与 ntfy；仅使用 ntfy 时只保留 ntfyPhone。只改选中的 harness，原完成 hook 无需修改。目标与凭据确认后执行 dry-run，再使用一个新 event-id 发送一次测试。
+
+自建 ntfy 的 iOS 锁屏即时推送还需配置 upstream-base-url，参考 [官方服务端说明](https://docs.ntfy.sh/config/#ios-instant-notifications)。API 接受、App 前台出现消息、锁屏实际通知分别验证。
+
+## 命令与路径
+
+```bash
+harness-notify --help
+harness-notify send --harness dsh --message '检查完成' --event-id 'session-123-turn-4' --dry-run
+printf '%s' '{"type":"agent-turn-complete","session_id":"s1","turn_id":"t1","cwd":"/你的项目","last_assistant_message":"检查完成"}' \
+  | harness-notify hook --harness other --dry-run
+```
+
+手动 send 未指定 event-id 时每次是新事件。hook 接收 stdin JSON 或单个 JSON 参数；harness 名称允许1–40位字母、数字、下划线、连字符。hook 默认 stdout 为空，失败写 stderr、退出0，不阻断 agent；send 失败退出1。
+
+| 路径 | 覆盖方式 |
+|---|---|
+| ~/.config/harness-notify/config.json | --config、HARNESS_NOTIFY_CONFIG；默认尊重 XDG_CONFIG_HOME |
+| ~/.local/state/harness-notify | --state-dir、HARNESS_NOTIFY_STATE_DIR；默认尊重 XDG_STATE_HOME |
+
+`--dry-run` 不发送、不调用飞书 CLI、不写配置或状态；ready=true 只表示配置可解析，不证明登录、连通或送达。`--dry-run` 优先于 install-hooks 的 --apply。
+
+## 接入方式
+
+| Harness | 配置与触发点 |
+|---|---|
+| Codex | ~/.codex/config.toml 的 notify；完成后的 agent-turn-complete，通过 JSON 参数 |
+| Claude Code | ~/.claude/settings.json 的 hooks.Stop，通过 stdin；仅主 agent |
+| DSH | ~/.dsh/cordis.patch.yml；适配器监听提交后的 session/event → turn/end，仅 reason.kind=completed 主会话 |
+
+安装器会先备份、保留无关配置，重复运行不添加重复 hook，不删除备份。install-hooks 会接入三套 harness；只授权改某一套时，请合并其单个入口或复用已存在的 hook。
+
+Codex 会串联原 notify：`adapters/codex-notify.mjs` 先调用原程序，再调用统一通知；原命令数组存私有 `codex-forward.json`。两方失败互不阻断。自动处理双引号命令数组及末尾逗号；复杂 TOML 拒绝猜改。没有原 notify 时可手工设：
 
 ```toml
 notify = ["/绝对路径/node", "/绝对路径/harness-notify/bin/harness-notify.mjs", "hook", "--harness", "codex"]
 ```
 
-有既有 `notify` 时，请保留原程序。可手工将原字符串数组存成私有 `codex-forward.json`，再把 `notify` 设为 Node、`adapters/codex-notify.mjs`、转发配置路径、通知配置路径构成的字符串数组。
-
-Claude Code 的 Stop 配置（合并到已有 hooks，不替换整个 settings）：
+Claude 的 Stop 发生在其他 Stop hooks 续跑决策之前，可能有一次提前提示；续跑后的最终 Stop 仍可通知。默认从最近用户消息 UUID 区分轮次；旧版本无 prompt id 且 transcript 不可读时回退到会话与回复去重，不同轮次的相同回复可能只通知一次。合并到已有 settings：
 
 ```json
-{
-  "hooks": {
-    "Stop": [{
-      "hooks": [{
-        "type": "command",
-        "command": "harness-notify hook --harness claude",
-        "timeout": 100
-      }]
-    }]
-  }
-}
+{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"harness-notify hook --harness claude","timeout":100}]}]}}
 ```
 
-DSH 的全局或 profile patch：
+DSH 适配器核对过0.2.0-rc.2事件 API，全局 patch 覆盖加载它的 profiles：
 
 ```yaml
 - insert:
@@ -135,30 +182,33 @@ DSH 的全局或 profile patch：
         configPath: /绝对路径/config.json
 ```
 
-其他 harness 只需在完成 hook 中调用 `send --harness NAME --message TEXT --event-id UNIQUE_TURN_ID`，或向 `hook` 传通用 JSON：
+`dsh --profile web --dump-config`（或 dsh-tui/headless/web-safe）只查合成树，不启动服务；不要把整个含私有配置的 dump 上传。Desktop profile 由 Electron 应用独占管理，CLI 拒绝 --profile desktop 是管理边界，需在应用自身验证。旧进程是否重载单独核对；不为通知绕过版本限制或修复无关插件。
 
-```bash
-printf '%s' '{"type":"agent-turn-complete","session_id":"session-1","turn_id":"turn-1","last_assistant_message":"检查完成"}' \
-  | harness-notify hook --harness other --dry-run
-```
+其他 harness 在完成 hook 调用 send，传稳定的 session/turn event-id，或向 hook 传上述通用 JSON。
 
-自定义 harness 名称仅接受 1–40 位字母、数字、下划线或连字符。JSON 可经 stdin 或单个命令行参数输入。`hook` 不向 stdout 输出协议内容；错误写 stderr，退出 `0`，不阻断 harness；`send` 失败退出 `1`。
-
-## 送达、去重和故障边界
-
-发送前校验整条路由，任一渠道缺配置时不发送任何渠道。网络/CLI 用有界超时，没有自动重试。Telegram 检查消息 ID；Bark 检查 API `code: 200`；飞书发送后通过 `+messages-mget` 校验 ID、正文与 `deleted: false`。API 接受推送不证明手机已显示或人已阅读。
-
-默认状态：`~/.local/state/harness-notify/`，每个事件及 channel 一个原子占用文件，权限 `600`。发送前写尝试记录，超时、进程崩溃、回读失败时保留记录；同一事件再次调用会跳过，避免结果未知时重复通知。状态文件只含状态、渠道名、消息 ID、脱敏错误，不保存正文或凭据。
-
-要人工补发，先确认原事件没有送达，再手动使用新的 `--event-id`；不提供自动清理或自动补发。不同配置的事件去重状态需要独立时，指定不同 `--state-dir`。迁移仓库路径、Node 路径或配置路径后，核对并重新接入 hooks。
-
-## 验证
+## 验证与排障
 
 ```bash
 npm test
 npm run check
+node scripts/install-skill.mjs --dry-run
 ```
 
-测试包含本机 HTTP server 的真实 Telegram/Bark 请求、飞书命令协议与回读模拟、并发去重、dry-run 无副作用、hook 合并及 Codex 原通知保留。无需 Token，无外部推送，无付费模型请求。真实第三方送达与 harness 的真实完成事件需在配置后另验。
+本机测试无需 Token、无外部推送、无付费模型请求，涵盖 Telegram/Bark/ntfy HTTP 协议、飞书命令与回读模拟、并发去重、1000字符/emoji截断、dry-run、原通知保留和技能安装不覆盖。
 
-接口依据：[Telegram Bot API](https://core.telegram.org/bots/api#sendmessage)、[Bark 官方教程](https://github.com/Finb/Bark/blob/master/docs/en-us/tutorial.md)、[Codex notify](https://learn.chatgpt.com/docs/config-file/config-advanced#notifications)、[Claude hooks](https://code.claude.com/docs/en/hooks#stop)。DSH 事件依据其安装包 `@deepseek-ai/dsh-session/lib/types/index.d.ts` 与 `types/types.d.ts`，飞书依据本机 `lark-cli im +messages-send --help` / `+messages-mget --help`。
+2026-10-09 已验证 Codex、Claude Code、DSH headless 的真实完成事件产生 Bark 成功回执；DSH web、dsh-tui、web-safe 合成配置包含唯一通知节点。未全部验证旧 Web/TUI 会话重载、Desktop 自动触发及每条消息的手机显示。ntfy 本机协议测试不等于真实受保护 topic 或设备送达。
+
+| 现象 | 核对内容 |
+|---|---|
+| 没有通知 | enabled、选中 route、环境变量、hook 是否唯一、进程重载、本次回执 |
+| 飞书失败 | 同一发送身份的登录、权限、接收人；返回 ID 后回读不能省略 |
+| ntfy 401/403 | 发布 Token、该账号的 topic 权限；不要回退匿名或换其他 topic |
+| API成功但手机没显示 | 手机订阅地址、通知权限、后台推送；自建 iOS 核对 upstream |
+| 同一事件跳过 | 发送前已保留尝试记录；先确认此前结果，不直接重发 |
+| 原 Codex 通知失败 | 私有转发数组、原程序路径，不移除原通知 |
+
+发送前验证整条路由，任一选中渠道配置无效时不发送任何渠道。网络/CLI 有界超时，没有自动重试。每个事件及渠道原子创建权限600的状态文件；只保存状态、渠道名、消息ID、脱敏错误，不保存正文和凭据。失败或崩溃后记录保留，避免结果未知时重复外部副作用。
+
+要补发，先确认原事件未送达，再按授权使用新 event-id；不提供自动清理、自动补发。不共用去重状态的配置可用不同 state-dir。新会话自动通知需真实原生事件与回执；手动 hook 测试只证明适配协议。手机显示需用户确认或设备证据。
+
+接口依据：[Telegram](https://core.telegram.org/bots/api#sendmessage)、[Bark](https://github.com/Finb/Bark/blob/master/docs/en-us/tutorial.md)、[ntfy](https://docs.ntfy.sh/publish/)、[Codex](https://learn.chatgpt.com/docs/config-file/config-advanced#notifications)、[Claude](https://code.claude.com/docs/en/hooks#stop)。DSH 依据安装包 dsh-session 的事件类型与实际运行；飞书依据本机 messages-send / messages-mget 的 --help。

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Harness 完成通知"
+  short_description: "统一配置 Codex、Claude Code、DSH 的 Bark、Telegram、飞书与 ntfy 完成推送"
+  default_prompt: "使用 $weicoz-harness-notify 配置当前 harness 的完成推送，并验证完整路径、harness 名称及最多1000字符摘要。"

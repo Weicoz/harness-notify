@@ -119,6 +119,36 @@ test('全路由验证先于发送；失败未知不自动重试，不泄露外�
   assert.equal(JSON.stringify(apiFailure).includes('PRIVATE'), false);
 });
 
+test('ntfy 根地址 JSON 发布、Bearer、中文通知、目标校验及去重', async t => {
+  const dir = await temp(t);
+  const requests = [];
+  const server = createServer(async (req, res) => {
+    let body = ''; for await (const chunk of req) body += chunk;
+    const data = JSON.parse(body);
+    requests.push({ url: req.url, authorization: req.headers.authorization, data });
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ id: 'test-message-id', event: 'message', topic: data.topic }));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const c = { ...config({ phone: { type: 'ntfy', server: `http://127.0.0.1:${server.address().port}`, topic: 'env:TOPIC', token: 'env:TOKEN' } }), includeSummary: true };
+  const p = plan(c, event, { TOPIC: 'private-test-topic', TOKEN: 'private-test-token' });
+  assert.equal(JSON.stringify(preview(p)).includes('private-test-'), false);
+  assert.equal((await send(p, dir)).results[0].messageId, 'test-message-id');
+  assert.equal(requests[0].url, '/');
+  assert.equal(requests[0].authorization, 'Bearer private-test-token');
+  assert.equal(requests[0].data.topic, 'private-test-topic');
+  assert.equal(requests[0].data.title, 'Codex · 一轮任务结束');
+  assert.ok(requests[0].data.message.includes('路径：/tmp/project'));
+  assert.ok(requests[0].data.message.includes('完成摘要：私有正文'));
+  await send(p, dir);
+  assert.equal(requests.length, 1);
+  await assert.rejects(send(plan(c, event, { TOPIC: 'private-test-topic' }), dir), /缺少 token/);
+  const wrong = await send({ ...p, eventId: 'wrong-topic' }, dir, { fetchFn: async () => ({ ok: true, json: async () => ({ id: 'id', event: 'message', topic: 'other' }) }) });
+  assert.match(wrong.results[0].error, /ntfy 未返回目标 topic/);
+  assert.equal(plan(config({ phone: { type: 'ntfy', topic: 'topic' } }), event).deliveries[0].error, undefined);
+});
+
 test('飞书 execFile 无 shell 插值，返回 ID 后回读校验', async t => {
   const dir = await temp(t);
   const p = plan(config({ fs: { type: 'feishu', identity: 'user', userId: 'ou_example' } }), { ...event, message: '中文换行\n$(touch /tmp/never-created)' });

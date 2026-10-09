@@ -1,7 +1,10 @@
 {
   "name": "harness-notify",
   "version": "0.1.0",
-  "description": "通过完成 hook 统一发送 Telegram、飞书 CLI、Bark 通知",
+  "description": "通过完成 hook 统一发送 Bark、Telegram、飞书 CLI、ntfy 通知",
+  "repository": { "type": "git", "url": "git+https://github.com/Weicoz/harness-notify.git" },
+  "homepage": "https://github.com/Weicoz/harness-notify#readme",
+  "bugs": { "url": "https://github.com/Weicoz/harness-notify/issues" },
   "type": "module",
   "bin": { "harness-notify": "bin/harness-notify.mjs" },
   "scripts": { "test": "node --test", "check": "node --check bin/harness-notify.mjs" },
