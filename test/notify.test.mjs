@@ -56,6 +56,25 @@ test('路由支持 harness 差异、通配、关闭及多个接收目标；预�
   assert.ok(plan(config({ bad: { type: 'bark', deviceKey: 'key', server: 'http://remote.invalid' } }), event).deliveries[0].error);
 });
 
+test('Codex 与 Claude 通知包含完整路径、Harness 名称和最终回复摘要；无正文不伪造完成内容', () => {
+  const c = { ...config({ phone: { type: 'bark', deviceKey: 'key' } }, { '*': ['phone'] }), includeSummary: true };
+  const cwd = '/tmp/项目A/相同目录名';
+  for (const [harness, name] of [['codex', 'Codex'], ['claude', 'Claude Code']]) {
+    const p = plan(c, { ...event, harness, cwd, summary: '修复登录失败，检查已通过。' });
+    assert.ok(p.body.includes(`Harness：${name}\n路径：${cwd}`));
+    assert.ok(p.body.includes('完成摘要：修复登录失败，检查已通过。'));
+    assert.equal(p.title, `${name} · 一轮任务结束`);
+  }
+  const empty = plan(c, { ...event, summary: '' });
+  assert.ok(empty.body.includes('完成摘要：未提供最终回复'));
+  const manual = plan(c, { harness: 'claude', message: '手动测试', eventId: 'manual' });
+  assert.ok(manual.body.includes(`路径：${process.cwd()}`));
+  assert.ok(manual.body.includes('完成摘要：手动测试'));
+  const long = plan(c, { ...event, cwd, summary: '长'.repeat(2000) });
+  assert.ok(long.body.includes(`路径：${cwd}`));
+  assert.equal(Array.from(long.body.split('完成摘要：')[1]).length, 1600);
+});
+
 test('Telegram/Bark 真实 HTTP JSON、API 成功判定、并发原子去重', async t => {
   const dir = await temp(t);
   const requests = [];
@@ -68,10 +87,12 @@ test('Telegram/Bark 真实 HTTP JSON、API 成功判定、并发原子去重', a
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => server.close(resolve)));
   const url = `http://127.0.0.1:${server.address().port}`;
-  const p = plan(config({ phone: { type: 'bark', deviceKey: 'key', server: url }, tg: { type: 'telegram', botToken: '123:token', chatId: 'chat', server: url } }), event);
+  const p = plan({ ...config({ phone: { type: 'bark', deviceKey: 'key', server: url }, tg: { type: 'telegram', botToken: '123:token', chatId: 'chat', server: url } }), includeSummary: true }, event);
   const results = await Promise.all([send(p, dir), send(p, dir)]);
   assert.equal(requests.length, 2);
   assert.equal(requests.find(r => r.url === '/push').body.device_key, 'key');
+  assert.ok(requests.find(r => r.url === '/push').body.body.includes('Harness：Codex\n路径：/tmp/project'));
+  assert.ok(requests.find(r => r.url === '/push').body.body.includes('完成摘要：私有正文'));
   assert.equal(requests.find(r => r.url.includes('sendMessage')).body.chat_id, 'chat');
   assert.equal(results.flatMap(r => r.results).filter(r => r.accepted).length, 2);
   assert.equal(results.flatMap(r => r.results).filter(r => r.skipped).length, 2);

@@ -57,7 +57,8 @@ harness-notify init
 - Bark：`deviceKey` 来自 iOS Bark App 的推送地址最后一段；`server` 是服务器根地址，不能包含设备 key。支持自建 HTTPS 服务。
 - 飞书：本机安装、登录 `lark-cli`；`identity` 明确选择 `user` 或 `bot`；`userId` 使用 `ou_...`，群聊改用 `chatId: "oc_..."`，两者只能填一个。`cli` 可设为完整可执行路径，便于桌面进程找到它。
 - 为不同接收人创建多个同类型 channel，再按 harness 路由。相同 route 中重复 channel 只发送一次。`*` 是未知 harness 的默认路由；显式 `[]` 关闭该 harness。
-- `includeSummary: false` 默认只发 harness、项目名和会话标识；设为 `true` 才发送最终回复的最多 1600 字符，不发送用户输入、思考内容或完整 transcript。
+- 通知正文包含 Harness 名称、完整工作路径、会话标识及完成摘要；手动 `send` 使用当前命令目录，完成 hook 使用 harness 提供的 `cwd`。
+- `includeSummary: false` 默认不发送最终回复正文；设为 `true` 后，以最终回复摘录作为完成摘要（最多 1600 字符）。不发送用户输入、思考内容或完整 transcript；没有最终回复时明确显示“未提供最终回复”。
 - `timeoutMs` 每次 HTTP/CLI 调用的超时，范围 `100–15000`。Telegram 总文本最多 3800 字符，Bark 正文最多 3000 字符。
 
 不要把真实配置、Bot Token、Bark key、接收人及状态文件加入 public 仓库。启用摘要会把最终回复发到你选择的平台。
