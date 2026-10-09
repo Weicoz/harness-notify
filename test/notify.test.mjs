@@ -48,6 +48,7 @@ test('Codex 从确切会话 ID 读取最新窗口名称，不猜最近会话；�
     JSON.stringify({ id: 's', thread_name: '旧名称' }),
     'invalid line',
     JSON.stringify({ id: 's', thread_name: '改名后的会话' }),
+    'x'.repeat(1200000),
     JSON.stringify({ id: 'other', thread_name: '其他窗口' }),
   ].join('\n'));
   const payload = { 'thread-id': 's', 'turn-id': 't' };
@@ -71,6 +72,9 @@ test('Claude 提取最新自定义标题，已有 prompt_id 也读取标题，�
   assert.equal((await enrichClaude({ ...payload, session_title: '显式标题' })).session_title, '显式标题');
   await writeFile(transcript_path, JSON.stringify({ type: 'ai-title', sessionId: 's', aiTitle: '自动生成名称' }));
   assert.equal((await enrichClaude(payload)).session_title, '自动生成名称');
+  await writeFile(transcript_path, JSON.stringify({ type: 'custom-title', sessionId: 's', customTitle: '长会话名称' }) + '\n' + 'x'.repeat(1200000) + '\n' + JSON.stringify({ type: 'user', uuid: 'new-prompt', message: { content: '新任务' } }));
+  assert.equal((await enrichClaude(payload)).session_title, '长会话名称');
+  assert.equal((await enrichClaude({ ...payload, prompt_id: undefined })).turn_id, 'new-prompt');
 });
 
 test('路由支持 harness 差异、通配、关闭及多个接收目标；预演不包含凭据', () => {
