@@ -147,6 +147,14 @@ test('ntfy 根地址 JSON 发布、Bearer、中文通知、目标校验及去重
   const wrong = await send({ ...p, eventId: 'wrong-topic' }, dir, { fetchFn: async () => ({ ok: true, json: async () => ({ id: 'id', event: 'message', topic: 'other' }) }) });
   assert.match(wrong.results[0].error, /ntfy 未返回目标 topic/);
   assert.equal(plan(config({ phone: { type: 'ntfy', topic: 'topic' } }), event).deliveries[0].error, undefined);
+  const longCwd = `/tmp/${'目录'.repeat(30)}/项目`;
+  const long = plan(c, { ...event, cwd: longCwd, eventId: 'emoji', summary: '😀'.repeat(1000) }, { TOPIC: 'private-test-topic', TOKEN: 'private-test-token' });
+  assert.ok(Buffer.byteLength(long.body) > 4096);
+  await send(long, dir);
+  assert.ok(Buffer.byteLength(requests[1].data.message) <= 4096);
+  assert.ok(requests[1].data.message.includes(`路径：${longCwd}`));
+  assert.ok(requests[1].data.message.endsWith('😀'));
+  assert.ok(plan(config({ phone: { type: 'ntfy', server: 'https://ntfy.sh/topic', topic: 'topic' } }), event).deliveries[0].error);
 });
 
 test('飞书 execFile 无 shell 插值，返回 ID 后回读校验', async t => {

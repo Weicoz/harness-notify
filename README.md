@@ -96,7 +96,7 @@ node scripts/install-skill.mjs --apply
 | timeoutMs | 每次 HTTP/CLI 调用超时，默认8000，范围100–15000 |
 | env:变量名 | 读取调用进程环境变量；也可直接在私有 JSON 填值 |
 
-桌面 harness 不保证继承终端环境变量。凭据只存私有配置，保持权限 `600`；不要把真实配置、接收人、topic、Token、状态或日志加入 public 仓库。启用摘要会将最终回复摘录发到所选平台。路径取 hook 的 cwd；手动 send 使用命令当前目录。Telegram 总文本最多3800字符，Bark/ntfy正文最多3000字符；摘要自身最多1000字符。
+桌面 harness 不保证继承终端环境变量。凭据只存私有配置，保持权限 `600`；不要把真实配置、接收人、topic、Token、状态或日志加入 public 仓库。启用摘要会将最终回复摘录发到所选平台。路径取 hook 的 cwd；手动 send 使用命令当前目录。Telegram 总文本最多3800字符，Bark正文最多3000字符，ntfy正文按其默认限制最多4096个UTF-8字节（不截断半个emoji）；摘要自身最多1000字符。
 
 ## 接入 ntfy
 
