@@ -1,0 +1,10 @@
+{
+  "name": "harness-notify",
+  "version": "0.1.0",
+  "description": "通过完成 hook 统一发送 Telegram、飞书 CLI、Bark 通知",
+  "type": "module",
+  "bin": { "harness-notify": "bin/harness-notify.mjs" },
+  "scripts": { "test": "node --test", "check": "node --check bin/harness-notify.mjs" },
+  "engines": { "node": ">=22" },
+  "license": "MIT"
+}

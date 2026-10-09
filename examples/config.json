@@ -1,0 +1,30 @@
+{
+  "enabled": false,
+  "includeSummary": false,
+  "timeoutMs": 8000,
+  "channels": {
+    "phone": {
+      "type": "bark",
+      "server": "https://api.day.app",
+      "deviceKey": "env:BARK_DEVICE_KEY",
+      "group": "harness"
+    },
+    "telegram": {
+      "type": "telegram",
+      "botToken": "env:TELEGRAM_BOT_TOKEN",
+      "chatId": "env:TELEGRAM_CHAT_ID"
+    },
+    "feishu": {
+      "type": "feishu",
+      "cli": "lark-cli",
+      "identity": "user",
+      "userId": "env:FEISHU_USER_ID"
+    }
+  },
+  "routes": {
+    "codex": ["phone"],
+    "claude": ["telegram"],
+    "dsh": ["feishu"],
+    "*": []
+  }
+}
