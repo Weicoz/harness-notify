@@ -70,9 +70,10 @@ test('Codex 与 Claude 通知包含完整路径、Harness 名称和最终回复�
   const manual = plan(c, { harness: 'claude', message: '手动测试', eventId: 'manual' });
   assert.ok(manual.body.includes(`路径：${process.cwd()}`));
   assert.ok(manual.body.includes('完成摘要：手动测试'));
-  const long = plan(c, { ...event, cwd, summary: '长'.repeat(2000) });
+  const long = plan(c, { ...event, cwd, summary: '长😀'.repeat(1000) });
   assert.ok(long.body.includes(`路径：${cwd}`));
-  assert.equal(Array.from(long.body.split('完成摘要：')[1]).length, 1600);
+  assert.equal(Array.from(long.body.split('完成摘要：')[1]).length, 1000);
+  assert.ok(long.body.endsWith('长😀'.repeat(500)));
 });
 
 test('Telegram/Bark 真实 HTTP JSON、API 成功判定、并发原子去重', async t => {
