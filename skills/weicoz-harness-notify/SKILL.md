@@ -5,7 +5,7 @@ description: 使用 harness-notify 安装、配置和验证 Codex、Claude Code�
 
 # Harness 完成通知
 
-使用现有 `harness-notify` 命令，按 harness 路由到 Bark、Telegram、飞书 CLI、ntfy。通知包含 harness 名称、完整工作路径、会话标识、完成摘要。摘要取最终回复摘录，最多 1000 个 Unicode 字符；不额外调用模型生成摘要。
+使用现有 `harness-notify` 命令，按 harness 路由到 Bark、Telegram、飞书 CLI、ntfy。标题显示 harness 名称与会话窗口名称；正文只保留完整工作路径与完成摘要，不重复展示 harness 和会话 ID。摘要取最终回复摘录，最多 1000 个 Unicode 字符；不额外调用模型生成摘要。
 
 ## 找到当前实现
 
@@ -51,6 +51,8 @@ install-hooks 同时接入三个 harness。若仅授权修改一套 harness 的 
 手工接入阅读源码仓库 README 的“接入方式”。不要重复注册 DSH 同名节点。用 `dsh --profile NAME --dump-config` 查合成配置，不启动服务；Desktop profile 由 Electron 独占管理，CLI 拒绝并不证明通知失败。某 profile 失败不代表其他 profile 失败，也不自动授权修复无关插件、重启现有会话或改代理。
 
 ntfy Token 在网页 Account 的 Access tokens 创建；手机允许通知不代表 topic 访问控制。复用原完成 hook；同时推送是在选中 route 加 ntfy 渠道，不替换 Bark。受保护 topic 缺发布凭据时，先完成独立准备，保留已有正常路由。不要向可猜的未保护公开 topic 发送私有路径与摘要。
+
+窗口名称优先取 hook 的 session_title；Codex 按精确 ID 读 session_index.jsonl，Claude 取 transcript 自定义标题或自动生成标题（自定义优先），DSH 取最新 session/title。读不到时显示未命名会话，不按目录、时间或最近窗口猜名称；手动发送可用 --session-title。
 
 ## 验证与发送
 

@@ -5,7 +5,7 @@ import { join, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { normalize, enrichClaude, plan, preview, send } from '../lib/notify.mjs';
+import { normalize, enrichCodex, enrichClaude, plan, preview, send } from '../lib/notify.mjs';
 
 const help = `harness-notify：统一任务完成推送（Bark、Telegram、飞书 CLI、ntfy；Node.js 22+）
   init                    创建私有配置，不覆盖已有文件
@@ -13,6 +13,7 @@ const help = `harness-notify：统一任务完成推送（Bark、Telegram、飞�
   hook --harness NAME [JSON] [--dry-run]  也可从 stdin 读取 JSON
   install-hooks [--dry-run] [--apply]    接入 Codex、Claude Code、DSH
   --config PATH           默认 ~/.config/harness-notify/config.json
+  --session-title NAME    手动发送或hook覆盖会话窗口名称
   --state-dir PATH        默认 ~/.local/state/harness-notify
 dry-run 不发送、不调用飞书 CLI、不写配置或状态。hook 失败仅写 stderr，不阻断 agent。
 `;
@@ -21,6 +22,7 @@ const hook = args[0] === 'hook';
 try {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
     harness: { type: 'string' }, message: { type: 'string' }, 'event-id': { type: 'string' },
+    'session-title': { type: 'string' },
     config: { type: 'string' }, 'state-dir': { type: 'string' },
     'dry-run': { type: 'boolean' }, apply: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
   } });
@@ -57,12 +59,14 @@ try {
       }
       let payload;
       try { payload = JSON.parse(input); } catch { throw new Error('hook 输入不是合法 JSON'); }
+      if (values['session-title'] !== undefined && payload && typeof payload === 'object') payload.session_title = values['session-title'];
+      if (values.harness === 'codex' && payload && typeof payload === 'object') payload = await enrichCodex(payload);
       if (values.harness === 'claude' && payload && typeof payload === 'object') payload = await enrichClaude(payload);
       event = normalize(values.harness, payload);
       if (!event) { if (values['dry-run']) print({ dryRun: true, skipped: '非主 agent 完成事件' }); }
     } else {
       if (!values.message?.trim()) throw new Error('send 需要 --message');
-      event = { harness: values.harness, message: values.message, eventId: values['event-id'] ?? randomUUID() };
+      event = { harness: values.harness, message: values.message, sessionTitle: values['session-title'], eventId: values['event-id'] ?? randomUUID() };
     }
     if (event) {
       let config;

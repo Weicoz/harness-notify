@@ -6,14 +6,14 @@ import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createServer } from 'node:http';
-import { normalize, enrichClaude, plan, preview, send } from '../lib/notify.mjs';
+import { normalize, enrichCodex, enrichClaude, plan, preview, send } from '../lib/notify.mjs';
 import { addStop, installHooks, replaceNotify } from '../scripts/install-hooks.mjs';
 import { apply, payloadFor } from '../adapters/dsh.mjs';
 
 const exec = promisify(execFile);
 const cli = new URL('../bin/harness-notify.mjs', import.meta.url).pathname;
 const config = (channels, routes = { codex: Object.keys(channels) }) => ({ enabled: true, channels, routes });
-const event = { harness: 'codex', session: 's', turn: 't', summary: '私有正文', cwd: '/tmp/project', eventId: 'same-turn' };
+const event = { harness: 'codex', session: 's', turn: 't', sessionTitle: '测试会话', summary: '私有正文', cwd: '/tmp/project', eventId: 'same-turn' };
 async function temp(t) { const dir = await mkdtemp(join(tmpdir(), 'harness-notify-')); t.after(() => rm(dir, { recursive: true, force: true })); return dir; }
 
 test('归一化兼容 Codex 参数及 Claude stdin，过滤非完成事件与子 agent', () => {
@@ -42,6 +42,37 @@ test('Claude 从最近用户消息 UUID 区分相同回复的不同轮次，跳�
   assert.equal((await enrichClaude(payload)).turn_id, 'prompt-2');
 });
 
+test('Codex 从确切会话 ID 读取最新窗口名称，不猜最近会话；保留显式名称', async t => {
+  const dir = await temp(t);
+  await writeFile(join(dir, 'session_index.jsonl'), [
+    JSON.stringify({ id: 's', thread_name: '旧名称' }),
+    'invalid line',
+    JSON.stringify({ id: 's', thread_name: '改名后的会话' }),
+    JSON.stringify({ id: 'other', thread_name: '其他窗口' }),
+  ].join('\n'));
+  const payload = { 'thread-id': 's', 'turn-id': 't' };
+  assert.equal((await enrichCodex(payload, dir)).session_title, '改名后的会话');
+  assert.equal((await enrichCodex({ ...payload, session_title: '显式名称' }, dir)).session_title, '显式名称');
+  assert.equal((await enrichCodex({ 'thread-id': 'unknown' }, dir)).session_title, undefined);
+  assert.equal((await enrichCodex(payload, join(dir, 'missing'))).session_title, undefined);
+});
+
+test('Claude 提取最新自定义标题，已有 prompt_id 也读取标题，忽略其他会话元数据', async t => {
+  const dir = await temp(t);
+  const transcript_path = join(dir, 'transcript.jsonl');
+  await writeFile(transcript_path, [
+    { type: 'custom-title', sessionId: 's', customTitle: '旧窗口名称' },
+    { type: 'custom-title', sessionId: 's', customTitle: '新窗口名称' },
+    { type: 'ai-title', sessionId: 's', aiTitle: '自动生成名称' },
+    { type: 'custom-title', sessionId: 'other', customTitle: '其他窗口' },
+  ].map(row => JSON.stringify(row)).join('\n'));
+  const payload = { session_id: 's', prompt_id: 'p', transcript_path, last_assistant_message: '完成' };
+  assert.equal((await enrichClaude(payload)).session_title, '新窗口名称');
+  assert.equal((await enrichClaude({ ...payload, session_title: '显式标题' })).session_title, '显式标题');
+  await writeFile(transcript_path, JSON.stringify({ type: 'ai-title', sessionId: 's', aiTitle: '自动生成名称' }));
+  assert.equal((await enrichClaude(payload)).session_title, '自动生成名称');
+});
+
 test('路由支持 harness 差异、通配、关闭及多个接收目标；预演不包含凭据', () => {
   const c = config({ phone: { type: 'bark', deviceKey: 'env:KEY' }, tg: { type: 'telegram', botToken: 'env:TOKEN', chatId: 'env:CHAT' } }, { codex: ['phone', 'phone'], claude: [], '*': ['tg'] });
   const env = { KEY: 'PRIVATE_KEY', TOKEN: '123:PRIVATE_TOKEN', CHAT: '12345' };
@@ -56,20 +87,23 @@ test('路由支持 harness 差异、通配、关闭及多个接收目标；预�
   assert.ok(plan(config({ bad: { type: 'bark', deviceKey: 'key', server: 'http://remote.invalid' } }), event).deliveries[0].error);
 });
 
-test('Codex 与 Claude 通知包含完整路径、Harness 名称和最终回复摘要；无正文不伪造完成内容', () => {
+test('标题显示Harness与窗口名，正文只含路径和摘要；未命名不猜测', () => {
   const c = { ...config({ phone: { type: 'bark', deviceKey: 'key' } }, { '*': ['phone'] }), includeSummary: true };
   const cwd = '/tmp/项目A/相同目录名';
   for (const [harness, name] of [['codex', 'Codex'], ['claude', 'Claude Code']]) {
     const p = plan(c, { ...event, harness, cwd, summary: '修复登录失败，检查已通过。' });
-    assert.ok(p.body.includes(`Harness：${name}\n路径：${cwd}`));
+    assert.ok(p.body.startsWith(`路径：${cwd}`));
+    assert.equal(p.body.includes('Harness：'), false);
+    assert.equal(p.body.includes('会话：'), false);
     assert.ok(p.body.includes('完成摘要：修复登录失败，检查已通过。'));
-    assert.equal(p.title, `${name} · 一轮任务结束`);
+    assert.equal(p.title, `${name} · 测试会话`);
   }
   const empty = plan(c, { ...event, summary: '' });
   assert.ok(empty.body.includes('完成摘要：未提供最终回复'));
   const manual = plan(c, { harness: 'claude', message: '手动测试', eventId: 'manual' });
   assert.ok(manual.body.includes(`路径：${process.cwd()}`));
   assert.ok(manual.body.includes('完成摘要：手动测试'));
+  assert.equal(manual.title, 'Claude Code · 未命名会话');
   const long = plan(c, { ...event, cwd, summary: '长😀'.repeat(1000) });
   assert.ok(long.body.includes(`路径：${cwd}`));
   assert.equal(Array.from(long.body.split('完成摘要：')[1]).length, 1000);
@@ -92,7 +126,8 @@ test('Telegram/Bark 真实 HTTP JSON、API 成功判定、并发原子去重', a
   const results = await Promise.all([send(p, dir), send(p, dir)]);
   assert.equal(requests.length, 2);
   assert.equal(requests.find(r => r.url === '/push').body.device_key, 'key');
-  assert.ok(requests.find(r => r.url === '/push').body.body.includes('Harness：Codex\n路径：/tmp/project'));
+  assert.equal(requests.find(r => r.url === '/push').body.title, 'Codex · 测试会话');
+  assert.ok(requests.find(r => r.url === '/push').body.body.startsWith('路径：/tmp/project'));
   assert.ok(requests.find(r => r.url === '/push').body.body.includes('完成摘要：私有正文'));
   assert.equal(requests.find(r => r.url.includes('sendMessage')).body.chat_id, 'chat');
   assert.equal(results.flatMap(r => r.results).filter(r => r.accepted).length, 2);
@@ -138,7 +173,7 @@ test('ntfy 根地址 JSON 发布、Bearer、中文通知、目标校验及去重
   assert.equal(requests[0].url, '/');
   assert.equal(requests[0].authorization, 'Bearer private-test-token');
   assert.equal(requests[0].data.topic, 'private-test-topic');
-  assert.equal(requests[0].data.title, 'Codex · 一轮任务结束');
+  assert.equal(requests[0].data.title, 'Codex · 测试会话');
   assert.ok(requests[0].data.message.includes('路径：/tmp/project'));
   assert.ok(requests[0].data.message.includes('完成摘要：私有正文'));
   await send(p, dir);
@@ -234,10 +269,11 @@ test('Codex 适配器实际调用原通知程序并传入同一 payload，CLI st
   assert.equal(await readFile(recorded, 'utf8'), payload);
 });
 
-test('DSH 仅已提交 completed 主轮次触发，正文仅取本轮最后文本', async t => {
-  const session = { header: { id: 's', cwd: '/tmp/project' }, snapshotEvents: () => [{ type: 'assistant/message', data: { turn: 1, message: { content: [{ type: 'thinking', text: 'secret' }, { type: 'text', text: '已完成' }] } } }] };
+test('DSH 仅已提交 completed 主轮次触发，正文仅取本轮最后文本与最新标题', async t => {
+  const session = { header: { id: 's', cwd: '/tmp/project' }, snapshotEvents: () => [{ type: 'assistant/message', data: { turn: 1, message: { content: [{ type: 'thinking', text: 'secret' }, { type: 'text', text: '已完成' }] } } }, { type: 'session/title', data: { title: '旧名称' } }, { type: 'session/title', data: { title: 'DSH窗口名称' } }] };
   const event = { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } };
   assert.equal(payloadFor(session, event).last_assistant_message, '已完成');
+  assert.equal(payloadFor(session, event).session_title, 'DSH窗口名称');
   assert.equal(payloadFor(session, { ...event, data: { ...event.data, reason: { kind: 'aborted' } } }), null);
   assert.equal(payloadFor({ ...session, header: { ...session.header, origin: 'subagent' } }, event), null);
   assert.equal(payloadFor(session, { type: 'agent/turn-stopping' }), null);

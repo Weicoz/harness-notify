@@ -6,10 +6,12 @@ export const inject = ['sessions'];
 
 export function payloadFor(session, event) {
   if (event.type !== 'turn/end' || event.data?.reason?.kind !== 'completed' || session.header.origin === 'subagent') return null;
-  const last = session.snapshotEvents().findLast(e => e.type === 'assistant/message' && e.data.turn === event.data.turn);
+  const events = session.snapshotEvents();
+  const last = events.findLast(e => e.type === 'assistant/message' && e.data.turn === event.data.turn);
   const content = last?.data?.message?.content;
   const summary = typeof content === 'string' ? content : Array.isArray(content) ? content.filter(b => b.type === 'text').map(b => b.text).join('\n') : '';
-  return { type: 'agent-turn-complete', session_id: session.header.id, turn_id: String(event.data.turn), cwd: session.header.cwd ?? '', last_assistant_message: summary };
+  const title = events.findLast(e => e.type === 'session/title')?.data?.title ?? '';
+  return { type: 'agent-turn-complete', session_id: session.header.id, turn_id: String(event.data.turn), cwd: session.header.cwd ?? '', session_title: title, last_assistant_message: summary };
 }
 
 export function apply(ctx, config = {}) {

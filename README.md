@@ -2,7 +2,7 @@
 
 统一完成通知命令：Codex、Claude Code、DSH 的完成 hook 调用一次，按配置发送到 Bark、Telegram、飞书 CLI 或 ntfy。每个 harness 可选择不同渠道与接收人，也可同时发送多个渠道。Node.js 22+，零第三方依赖，无常驻服务。
 
-通知包含 **harness 名称、完整工作路径、会话标识、完成摘要**。摘要取最终回复摘录，最多 **1000 个 Unicode 字符**；不额外调用模型生成摘要。一轮回复结束不代表测试、部署或业务验收成功。
+标题显示 **harness 名称 · 会话窗口名称**，正文只保留 **完整工作路径、完成摘要**。摘要取最终回复摘录，最多 **1000 个 Unicode 字符**；不额外调用模型生成摘要。一轮回复结束不代表测试、部署或业务验收成功。
 
 ## 安装
 
@@ -52,10 +52,8 @@ harness-notify send --harness codex --message '通知链路测试' --event-id '�
 通知示例：
 
 ```text
-Codex · 一轮任务结束
-Harness：Codex
+Codex · 修复登录问题
 路径：/你的项目/完整工作目录
-会话：对应会话标识
 完成摘要：修复登录问题，检查通过。
 ```
 
@@ -96,7 +94,7 @@ node scripts/install-skill.mjs --apply
 | timeoutMs | 每次 HTTP/CLI 调用超时，默认8000，范围100–15000 |
 | env:变量名 | 读取调用进程环境变量；也可直接在私有 JSON 填值 |
 
-桌面 harness 不保证继承终端环境变量。凭据只存私有配置，保持权限 `600`；不要把真实配置、接收人、topic、Token、状态或日志加入 public 仓库。启用摘要会将最终回复摘录发到所选平台。路径取 hook 的 cwd；手动 send 使用命令当前目录。Telegram 总文本最多3800字符，Bark正文最多3000字符，ntfy正文按其默认限制最多4096个UTF-8字节（不截断半个emoji）；摘要自身最多1000字符。
+桌面 harness 不保证继承终端环境变量。凭据只存私有配置，保持权限 `600`；不要把真实配置、接收人、topic、Token、状态或日志加入 public 仓库。启用摘要会将最终回复摘录发到所选平台。路径取 hook 的 cwd；手动 send 使用命令当前目录。窗口名称优先使用 hook 的 session_title；Codex 按精确 thread-id 读 CODEX_HOME 下的 session_index.jsonl，Claude 从对应 transcript 取自定义标题或自动生成标题（自定义优先），DSH 取最新 session/title。标题源缺失或不可读时显示“未命名会话”，不猜其他窗口。手动发送可指定 --session-title。Telegram 总文本最多3800字符，Bark正文最多3000字符，ntfy正文按其默认限制最多4096个UTF-8字节（不截断半个emoji）；摘要自身最多1000字符。
 
 ## 接入 ntfy
 
@@ -136,7 +134,7 @@ node scripts/install-skill.mjs --apply
 
 ```bash
 harness-notify --help
-harness-notify send --harness dsh --message '检查完成' --event-id 'session-123-turn-4' --dry-run
+harness-notify send --harness dsh --session-title '发布前检查' --message '检查完成' --event-id 'session-123-turn-4' --dry-run
 printf '%s' '{"type":"agent-turn-complete","session_id":"s1","turn_id":"t1","cwd":"/你的项目","last_assistant_message":"检查完成"}' \
   | harness-notify hook --harness other --dry-run
 ```
@@ -194,7 +192,7 @@ npm run check
 node scripts/install-skill.mjs --dry-run
 ```
 
-本机测试无需 Token、无外部推送、无付费模型请求，涵盖 Telegram/Bark/ntfy HTTP 协议、飞书命令与回读模拟、并发去重、1000字符/emoji截断、dry-run、原通知保留和技能安装不覆盖。
+本机测试无需 Token、无外部推送、无付费模型请求，涵盖 Telegram/Bark/ntfy HTTP 协议、飞书命令与回读模拟、并发去重、会话名称读取、1000字符/emoji截断、dry-run、原通知保留和技能安装不覆盖。
 
 2026-10-09 已验证 Codex、Claude Code、DSH headless 的真实完成事件产生 Bark 成功回执；DSH web、dsh-tui、web-safe 合成配置包含唯一通知节点。未全部验证旧 Web/TUI 会话重载、Desktop 自动触发及每条消息的手机显示。ntfy 本机协议测试不等于真实受保护 topic 或设备送达。
 
