@@ -72,11 +72,35 @@ export async function installHooks({ apply = false, cliPath, configPath, home = 
     const notifyArgs = [nodePath, adapter, forwardPath, configPath];
     const codex = replaceNotify(codexBefore, notifyArgs);
     const forwardBefore = await readOptional(forwardPath);
+    const adapterName = 'codex-notify.mjs';
+    const cleanPrevious = cmd => {
+      if (!Array.isArray(cmd)) return [];
+      const res = [];
+      for (let i = 0; i < cmd.length; i++) {
+        if (cmd[i] === '--previous-notify') { i++; continue; }
+        if (typeof cmd[i] === 'string' && cmd[i].includes(adapterName)) continue;
+        res.push(cmd[i]);
+      }
+      return res;
+    };
+    const cleanedPrev = cleanPrevious(codex.previous);
     const wrapped = JSON.stringify(codex.previous) === JSON.stringify(notifyArgs);
     if (wrapped && forwardBefore === null) throw new Error('Codex 已串联但原通知配置缺失，未覆盖');
-    if (!wrapped && forwardBefore !== null) throw new Error('已有 Codex 转发配置，未覆盖；请检查本地文件');
-    if (codex.previous.includes(adapter) && !wrapped) throw new Error('已有不同的 Codex 通知串联，未覆盖');
-    changes.push({ harness: 'codex-forward', path: forwardPath, before: forwardBefore, after: wrapped ? forwardBefore : JSON.stringify(codex.previous, null, 2) + '\n' });
+    if (codex.previous.some(arg => typeof arg === 'string' && arg.includes(adapterName)) && !wrapped) {
+      // 只有在未由本工具完全包装且包含非 --previous-notify 的 adapter 自身时才拦截
+      if (!codex.previous.some(arg => arg === '--previous-notify')) {
+        throw new Error('已有不同的 Codex 通知串联，未覆盖');
+      }
+    }
+    let forwardAfter;
+    if (wrapped) {
+      forwardAfter = forwardBefore;
+    } else if (cleanedPrev.length > 0) {
+      forwardAfter = JSON.stringify(cleanedPrev, null, 2) + '\n';
+    } else {
+      forwardAfter = forwardBefore ? JSON.stringify(cleanPrevious(JSON.parse(forwardBefore)), null, 2) + '\n' : '[]\n';
+    }
+    changes.push({ harness: 'codex-forward', path: forwardPath, before: forwardBefore, after: forwardAfter });
     changes.push({ harness: 'codex', path: codexPath, before: codexBefore, after: codex.after });
   }
 

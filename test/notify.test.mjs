@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, readFile, readdir, stat, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, readdir, stat, rm, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
@@ -393,3 +393,30 @@ test('CLI send 支持 --title 与 --body 参数进行自定义格式推送', asy
   assert.equal(parsed.title, '测试标题');
   assert.equal(parsed.body, '测试正文');
 });
+
+test('Codex installHooks 自动剥离 --previous-notify 嵌套并幂等完成串联', async t => {
+  const dir = await temp(t);
+  const codexPath = join(dir, '.codex/config.toml');
+  const forwardPath = join(dir, '.config/harness-notify/codex-forward.json');
+  await mkdir(join(dir, '.codex'), { recursive: true });
+  await mkdir(join(dir, '.config/harness-notify'), { recursive: true });
+
+  const rawCodex = 'notify = ["/app/sky", "turn-ended", "--previous-notify", "[\'old\']"]\n';
+  await writeFile(codexPath, rawCodex);
+  await writeFile(forwardPath, JSON.stringify(['/app/sky', 'turn-ended'], null, 2) + '\n');
+
+  const options = { home: dir, cliPath: cli, configPath: join(dir, 'config.json'), harness: 'codex' };
+  const res = await installHooks({ ...options, apply: true });
+  assert.equal(res.dryRun, false);
+
+  const forwardSaved = JSON.parse(await readFile(forwardPath, 'utf8'));
+  assert.deepEqual(forwardSaved, ['/app/sky', 'turn-ended']);
+
+  const codexSaved = await readFile(codexPath, 'utf8');
+  assert.ok(codexSaved.includes('codex-notify.mjs'));
+
+  // 再次运行验证幂等性
+  const dry = await installHooks(options);
+  assert.ok(dry.changes.every(c => !c.changed));
+});
+
