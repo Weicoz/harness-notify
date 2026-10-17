@@ -6,8 +6,8 @@ import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createServer } from 'node:http';
-import { normalize, enrichCodex, enrichClaude, plan, preview, send } from '../lib/notify.mjs';
-import { addStop, installHooks, replaceNotify } from '../scripts/install-hooks.mjs';
+import { normalize, enrichCodex, enrichClaude, enrichAgy, plan, preview, send } from '../lib/notify.mjs';
+import { addStop, addAgyStop, installHooks, replaceNotify } from '../scripts/install-hooks.mjs';
 import { apply, payloadFor } from '../adapters/dsh.mjs';
 
 const exec = promisify(execFile);
@@ -290,4 +290,106 @@ test('DSH 仅已提交 completed 主轮次触发，正文仅取本轮最后文�
   await handlers['session/event'](session, event);
   handlers.dispose();
   assert.deepEqual(warnings, []);
+});
+
+test('Antigravity (AGY) 归一化兼容 Stop payload 与 workspacePaths，过滤子 agent', () => {
+  const agy = normalize('agy', { conversationId: 'conv-1', workspacePaths: ['/tmp/proj'], last_assistant_message: '完成任务', executionNum: 2 });
+  assert.equal(agy.session, 'conv-1');
+  assert.equal(agy.summary, '完成任务');
+  assert.equal(agy.cwd, '/tmp/proj');
+  assert.equal(agy.turn, '2');
+  assert.equal(normalize('agy', { conversationId: 'conv-1', nestingDepth: 1, last_assistant_message: '完成任务' }), null);
+  assert.equal(normalize('agy', { conversationId: 'conv-1', parentConversationId: 'parent-1', last_assistant_message: '完成任务' }), null);
+  assert.equal(normalize('agy', { conversationId: 'conv-1', source: 'subagent', last_assistant_message: '完成任务' }), null);
+  assert.equal(normalize('agy', { hook_event_name: 'PreToolUse', conversationId: 'conv-1', last_assistant_message: '完成任务' }), null);
+  assert.throws(() => normalize('agy', { conversationId: 'conv-1' }));
+});
+
+test('Antigravity (AGY) 从 transcript 提取最新回复与轮次，优先读 full 文件，从 SQLite 读取窗口标题', async t => {
+  const dir = await temp(t);
+  const transcriptPath = join(dir, 'transcript.jsonl');
+  const fullTranscriptPath = join(dir, 'transcript_full.jsonl');
+  await writeFile(transcriptPath, [
+    JSON.stringify({ step_index: 0, source: 'USER_EXPLICIT', type: 'USER_INPUT', content: '第一轮' }),
+    JSON.stringify({ step_index: 1, source: 'MODEL', type: 'PLANNER_RESPONSE', content: '第一轮完成' }),
+    JSON.stringify({ step_index: 2, source: 'SYSTEM_SDK', type: 'EPHEMERAL_MESSAGE', content: '系统信息' }),
+    JSON.stringify({ step_index: 3, source: 'USER_EXPLICIT', type: 'USER_INPUT', content: '第二轮' }),
+    JSON.stringify({ step_index: 4, source: 'MODEL', type: 'PLANNER_RESPONSE', content: '' }),
+  ].join('\n'));
+  await writeFile(fullTranscriptPath, [
+    JSON.stringify({ step_index: 4, source: 'MODEL', type: 'PLANNER_RESPONSE', content: '第二轮完整最终回复' }),
+  ].join('\n'));
+
+  const payload = { conversationId: 'c1', transcriptPath, workspacePaths: ['/tmp/workspace'] };
+  const mockExec = async (cmd, args) => {
+    assert.equal(cmd, 'sqlite3');
+    assert.ok(args.includes('-json'));
+    return { stdout: JSON.stringify([{ title: 'AGY测试会话', nesting_depth: 0 }]) };
+  };
+  const enriched = await enrichAgy(payload, { geminiHome: dir, execFn: mockExec });
+  assert.equal(enriched.session_title, 'AGY测试会话');
+  assert.equal(enriched.last_assistant_message, '第二轮完整最终回复');
+  assert.equal(enriched.turn_id, '3');
+
+  const p = plan({ ...config({ phone: { type: 'bark', deviceKey: 'key' } }, { agy: ['phone'] }), includeSummary: true }, { harness: 'agy', sessionTitle: enriched.session_title, summary: enriched.last_assistant_message, cwd: '/tmp/workspace', eventId: 'agy-ev-1' });
+  assert.equal(p.title, 'Antigravity · AGY测试会话');
+  assert.ok(p.body.includes('完成摘要：第二轮完整最终回复'));
+});
+
+test('Antigravity (AGY) hooks.json 幂等合并，保留已有其他 hooks', () => {
+  const before = JSON.stringify({
+    'coding-agents': { PreInvocation: [{ command: 'hindsight' }] },
+    herdr: { PreInvocation: [{ command: 'herdr' }] }
+  });
+  const cmd = 'node /path/to/harness-notify.mjs hook --harness agy';
+  const merged = JSON.parse(addAgyStop(before, cmd));
+  assert.ok(merged['coding-agents']);
+  assert.ok(merged.herdr);
+  assert.equal(merged['harness-notify'].Stop[0].command, cmd);
+  assert.equal(addAgyStop(JSON.stringify(merged), cmd), JSON.stringify(merged));
+});
+
+test('支持灵活定制标题 title 与正文 body，不强制加路径与摘要前缀', () => {
+  const c = config({ phone: { type: 'bark', deviceKey: 'key' } }, { mailguard: ['phone'] });
+  const p = plan(c, { harness: 'mailguard', title: '📧 收到新验证码 [GitHub]', body: '验证码: 829104\n有效时间: 10分钟' });
+  assert.equal(p.title, '📧 收到新验证码 [GitHub]');
+  assert.equal(p.body, '验证码: 829104\n有效时间: 10分钟');
+  assert.equal(p.text, '📧 收到新验证码 [GitHub]\n验证码: 829104\n有效时间: 10分钟');
+});
+
+test('支持 raw 纯净模式，不添加路径与完成摘要', () => {
+  const c = config({ phone: { type: 'bark', deviceKey: 'key' } });
+  const p = plan(c, { harness: 'codex', message: '纯净内容', raw: true });
+  assert.equal(p.title, 'Codex');
+  assert.equal(p.body, '纯净内容');
+});
+
+test('支持 config.templates 自定义模版渲染', () => {
+  const c = {
+    ...config({ phone: { type: 'bark', deviceKey: 'key' } }, { mailguard: ['phone'] }),
+    templates: {
+      mailguard: {
+        title: '【{harnessName}】{title}',
+        body: '内容：{body}'
+      }
+    }
+  };
+  const p = plan(c, { harness: 'mailguard', title: '告警通知', body: '磁盘空间充足' });
+  assert.equal(p.title, '【mail-guard】告警通知');
+  assert.equal(p.body, '内容：磁盘空间充足');
+});
+
+test('normalize 兼容非 agent-turn 的自定义通知 payload', () => {
+  const ev = normalize('mailguard', { title: '自定义标题', body: '测试正文' });
+  assert.equal(ev.title, '自定义标题');
+  assert.equal(ev.body, '测试正文');
+  assert.equal(ev.message, '测试正文');
+  assert.ok(ev.eventId);
+});
+
+test('CLI send 支持 --title 与 --body 参数进行自定义格式推送', async () => {
+  const out = await exec(process.execPath, [cli, 'send', '--harness', 'mailguard', '--title', '测试标题', '--body', '测试正文', '--dry-run']);
+  const parsed = JSON.parse(out.stdout);
+  assert.equal(parsed.title, '测试标题');
+  assert.equal(parsed.body, '测试正文');
 });

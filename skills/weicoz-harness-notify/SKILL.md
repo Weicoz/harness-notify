@@ -1,6 +1,6 @@
 ---
 name: weicoz-harness-notify
-description: 使用 harness-notify 安装、配置和验证 Codex、Claude Code、DSH 的完成通知，或排查 Bark、Telegram、飞书 CLI、ntfy 推送问题。适用于任务结束推送、按 harness 选择渠道或接收人、通知路径与摘要设置；不用于业务提醒、群发运营或调整代理。
+description: 使用 harness-notify 安装、配置和验证 Codex、Claude Code、DSH、Antigravity (AGY) 的完成通知，或排查 Bark、Telegram、飞书 CLI、ntfy 推送问题。适用于任务结束推送、按 harness 选择渠道或接收人、通知路径与摘要设置；不用于业务提醒、群发运营或调整代理。
 ---
 
 # Harness 完成通知
@@ -23,7 +23,7 @@ description: 使用 harness-notify 安装、配置和验证 Codex、Claude Code�
 |---|---|
 | 全局开关 | `enabled: true` 才真实发送 |
 | 完成摘要 | 用户要求摘要时设 `includeSummary: true`；否则保留原设置，默认 `false` |
-| 路由 | `routes.codex`、`routes.claude`、`routes.dsh` 是渠道名称数组；`[]` 关闭对应路由 |
+| 路由 | `routes.codex`、`routes.claude`、`routes.dsh`、`routes.agy` 是渠道名称数组；`[]` 关闭对应路由 |
 | 多接收人 | 在 channels 建不同名称的同类型渠道，再加入路由 |
 | 其他 harness | `routes[NAME]` 或 `routes["*"]`；路由键区分大小写 |
 | Bark | `type: "bark"`、server 为服务器根地址、deviceKey 为设备 key |
@@ -40,19 +40,39 @@ harness-notify install-hooks --dry-run
 harness-notify install-hooks --apply
 ```
 
-install-hooks 同时接入三个 harness。若仅授权修改一套 harness 的 hook，按 README 合并单个入口，或复用已有 hook；不要为启用一条路由改其他 harness。启用已有路由通常只需改私有 JSON。
+install-hooks 默认覆盖四套 harness（Codex、Claude Code、DSH、AGY）。可使用 `--harness NAME` 仅接入或检查指定 harness（如 `install-hooks --harness agy --dry-run` / `--apply`），避免无授权或不兼容修改其他 harness。
 
 | Harness | 接入方式与边界 |
 |---|---|
 | Codex | config.toml 的 notify，在 agent-turn-complete 传 JSON 参数。保留原 notify：adapters/codex-notify.mjs 串联，原命令数组存私有 codex-forward.json；复杂 TOML 不猜改。 |
 | Claude Code | settings.json 的 hooks.Stop，JSON 经 stdin。保留其他 hooks，不用 SubagentStop 替代主任务。Stop 可能被其他 hook 要求续跑，通知不等价于业务最终验收。 |
 | DSH | 全局 cordis.patch.yml 插入 adapters/dsh.mjs，监听提交后的 session/event → turn/end，仅通知 reason.kind: completed 主会话；核对过 DSH 0.2.0-rc.2。 |
+| Antigravity (AGY) | ~/.gemini/config/hooks.json 的 Stop，经 stdin 接收。自动从 conversation_summaries.db 提取标题并从 transcript 解析摘要，过滤子 agent；保留已有其他 hooks。 |
 
-手工接入阅读源码仓库 README 的“接入方式”。不要重复注册 DSH 同名节点。用 `dsh --profile NAME --dump-config` 查合成配置，不启动服务；Desktop profile 由 Electron 独占管理，CLI 拒绝并不证明通知失败。某 profile 失败不代表其他 profile 失败，也不自动授权修复无关插件、重启现有会话或改代理。
+## 各 Harness 接入注意事项
 
-ntfy Token 在网页 Account 的 Access tokens 创建；手机允许通知不代表 topic 访问控制。复用原完成 hook；同时推送是在选中 route 加 ntfy 渠道，不替换 Bark。受保护 topic 缺发布凭据时，先完成独立准备，保留已有正常路由。不要向可猜的未保护公开 topic 发送私有路径与摘要。
+- **Antigravity (AGY)**：
+  - **保留已有 Hook**：配置文件为 `~/.gemini/config/hooks.json`，在顶层加入 `"harness-notify": { "Stop": [...] }`。必须保留同文件已有其他 hook 组（如 `coding-agents`、`herdr`），禁止整体覆盖或破坏原有配置。
+  - **单 Harness 隔离接入**：使用 `harness-notify install-hooks --harness agy --apply`，仅修改 AGY 配置，完全不触碰 Codex、Claude 或 DSH。
+  - **事件与协议**：AGY 的 Stop Hook 在会话结束时通过 `stdin` 传入 JSON 元数据（含 `conversationId`、`transcriptPath`、`workspacePaths`）。`harness-notify hook` 执行完毕以 exit 0 退出且 stdout 保持为空，AGY 正常结束流程，不阻断运行。
+  - **会话标题读取**：AGY 会话标题持久化在 `~/.gemini/antigravity-cli/conversation_summaries.db`（SQLite）。适配器优先使用 `sqlite3 -json` 提取对应 `conversationId` 的标题；若系统未安装 sqlite3 或数据库不可读，自动安全降级为未命名会话，绝不根据其他会话盲猜。
+  - **回复摘要提取**：从 `transcript.jsonl`（及截断时的 `transcript_full.jsonl`）中提取，必须严格匹配 `type === 'PLANNER_RESPONSE'`（排除 `GENERIC` 工具回包），确保摘要是真实的最终模型答复，而非中间工具输出。
+  - **子 Agent 过滤**：AGY 派生子任务（`nesting_depth > 0`、`parent_conversation_id` 或 `source: "subagent"`）会自动静默忽略，避免后台子任务结束引发重复通知。
+- **Codex**：
+  - `config.toml` 的 notify 必须保留原程序串联。若已有其他工具包装（如 SkyComputerUseClient），通过 `--harness codex` 独立安装或手工串联，不得清除原命令。
+- **Claude Code**：
+  - `settings.json` 的 `hooks.Stop` 通过 stdin 传入。Stop 事件发生在其他 hook 续跑决策之前；多次续跑由最终 Stop 通知，子 agent（带 `agent_id`）自动过滤。
+- **DSH**：
+  - 适配器针对主会话 `turn/end` 且 `reason.kind === 'completed'` 触发，自动过滤子 agent。用 `dsh --profile NAME --dump-config` 查合成配置，不启动服务；Desktop profile 由 Electron 独占管理。
 
-窗口名称优先取 hook 的 session_title；Codex 按精确 ID 读 session_index.jsonl，Claude 取 transcript 自定义标题或自动生成标题（自定义优先），DSH 取最新 session/title。读不到时显示未命名会话，不按目录、时间或最近窗口猜名称；手动发送可用 --session-title。
+## 开源规范与安全边界
+
+本技能面向公开开源仓库（GitHub [harness-notify](https://github.com/Weicoz/harness-notify)）设计，必须遵循通用安全与可移植性规范：
+
+- **严禁硬编码敏感凭据**：任何 Token、密码、私人 Webhook、DeviceKey、Chat ID 或特定机器的绝对路径（如 `/Users/xxx`）严禁写入本技能、文档、代码或 Git 提交。所有凭据仅存在于本地私有配置文件 `~/.config/harness-notify/config.json`（权限保持 `600`，且已通过 `.gitignore` 排除），或使用 `env:变量名` 从本地环境变量读取。
+- **预演模式优先**：验证配置与逻辑时使用 `--dry-run`；预演模式绝不发起外网 HTTP 请求、不执行飞书 CLI、不落盘状态文件，且输出已自动脱敏，不回显真实密钥。
+- **状态与去重安全**：状态回执保存在 `~/.local/state/harness-notify/`（权限 `600`），仅记录哈希去重键、渠道名、消息 ID 和脱敏错误信息，绝对不保存用户消息正文、路径或凭据。
+- **窗口名称**：优先取 hook 的 session_title；Codex 按精确 ID 读 session_index.jsonl，Claude 取 transcript 自定义标题或自动生成标题（自定义优先），DSH 取最新 session/title，Antigravity 取 SQLite conversation_summaries.db。读不到时显示未命名会话，不按目录、时间或最近窗口猜名称；手动发送可用 --session-title。
 
 ## 验证与发送
 

@@ -23,6 +23,18 @@ export function addStop(raw, command) {
   return JSON.stringify(data, null, 2) + '\n';
 }
 
+export function addAgyStop(raw, command) {
+  const data = raw === null ? {} : JSON.parse(raw);
+  if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('已有 hook 配置不是 JSON 对象');
+  data['harness-notify'] ??= {};
+  if (typeof data['harness-notify'] !== 'object' || Array.isArray(data['harness-notify'])) throw new Error('已有 harness-notify 结构不合法');
+  data['harness-notify'].Stop ??= [];
+  if (!Array.isArray(data['harness-notify'].Stop)) throw new Error('已有 Stop 结构不合法');
+  if (data['harness-notify'].Stop.some(h => h.command === command)) return raw;
+  data['harness-notify'].Stop.push({ command, timeout: 30 });
+  return JSON.stringify(data, null, 2) + '\n';
+}
+
 export function replaceNotify(raw, next) {
   const text = raw ?? '';
   const match = /^notify\s*=\s*\[/m.exec(text);
@@ -48,35 +60,52 @@ export function replaceNotify(raw, next) {
   return { previous, after: text.slice(0, match.index) + `notify = ${JSON.stringify(next)}` + text.slice(end + 1) };
 }
 
-export async function installHooks({ apply = false, cliPath, configPath, home = homedir(), nodePath = process.execPath }) {
+export async function installHooks({ apply = false, cliPath, configPath, home = homedir(), nodePath = process.execPath, harness } = {}) {
   const changes = [];
-  const codexPath = join(home, '.codex/config.toml');
-  const codexBefore = await readOptional(codexPath);
-  const forwardPath = join(home, '.config/harness-notify/codex-forward.json');
-  const adapter = fileURLToPath(new URL('../adapters/codex-notify.mjs', import.meta.url));
-  const notifyArgs = [nodePath, adapter, forwardPath, configPath];
-  const codex = replaceNotify(codexBefore, notifyArgs);
-  const forwardBefore = await readOptional(forwardPath);
-  const wrapped = JSON.stringify(codex.previous) === JSON.stringify(notifyArgs);
-  if (wrapped && forwardBefore === null) throw new Error('Codex 已串联但原通知配置缺失，未覆盖');
-  if (!wrapped && forwardBefore !== null) throw new Error('已有 Codex 转发配置，未覆盖；请检查本地文件');
-  if (codex.previous.includes(adapter) && !wrapped) throw new Error('已有不同的 Codex 通知串联，未覆盖');
-  changes.push({ harness: 'codex-forward', path: forwardPath, before: forwardBefore, after: wrapped ? forwardBefore : JSON.stringify(codex.previous, null, 2) + '\n' });
-  changes.push({ harness: 'codex', path: codexPath, before: codexBefore, after: codex.after });
-  for (const [harness, path] of [['claude', join(home, '.claude/settings.json')]]) {
-    const command = `${quote(nodePath)} ${quote(cliPath)} hook --harness ${harness} --config ${quote(configPath)}`;
-    const before = await readOptional(path);
-    changes.push({ harness, path, before, after: addStop(before, command) });
+  const target = harness ? [harness] : ['codex', 'claude', 'dsh', 'agy'];
+
+  if (target.includes('codex')) {
+    const codexPath = join(home, '.codex/config.toml');
+    const codexBefore = await readOptional(codexPath);
+    const forwardPath = join(home, '.config/harness-notify/codex-forward.json');
+    const adapter = fileURLToPath(new URL('../adapters/codex-notify.mjs', import.meta.url));
+    const notifyArgs = [nodePath, adapter, forwardPath, configPath];
+    const codex = replaceNotify(codexBefore, notifyArgs);
+    const forwardBefore = await readOptional(forwardPath);
+    const wrapped = JSON.stringify(codex.previous) === JSON.stringify(notifyArgs);
+    if (wrapped && forwardBefore === null) throw new Error('Codex 已串联但原通知配置缺失，未覆盖');
+    if (!wrapped && forwardBefore !== null) throw new Error('已有 Codex 转发配置，未覆盖；请检查本地文件');
+    if (codex.previous.includes(adapter) && !wrapped) throw new Error('已有不同的 Codex 通知串联，未覆盖');
+    changes.push({ harness: 'codex-forward', path: forwardPath, before: forwardBefore, after: wrapped ? forwardBefore : JSON.stringify(codex.previous, null, 2) + '\n' });
+    changes.push({ harness: 'codex', path: codexPath, before: codexBefore, after: codex.after });
   }
-  const path = join(home, '.dsh/cordis.patch.yml');
-  const before = await readOptional(path);
-  const marker = '# harness-notify:begin';
-  const plugin = fileURLToPath(new URL('../adapters/dsh.mjs', import.meta.url));
-  const block = `${marker}\n- insert:\n    - id: harness-notify\n      name: ${JSON.stringify(plugin)}\n      config:\n        configPath: ${JSON.stringify(configPath)}\n# harness-notify:end\n`;
-  // YAML 不重序列化，原配置逐字保留；已有同名非托管节点不擅自覆盖。
-  if (before?.includes(marker) && !before.includes(block)) throw new Error('DSH 已有不同的 harness-notify 配置，未覆盖');
-  if (!before?.includes(marker) && /\bid:\s*["']?harness-notify\b/.test(before ?? '')) throw new Error('DSH 已有同名插件节点，未覆盖');
-  changes.push({ harness: 'dsh', path, before, after: before?.includes(marker) ? before : (before ?? '') + (before && !before.endsWith('\n') ? '\n' : '') + '\n' + block });
+
+  if (target.includes('claude')) {
+    for (const [h, path] of [['claude', join(home, '.claude/settings.json')]]) {
+      const command = `${quote(nodePath)} ${quote(cliPath)} hook --harness ${h} --config ${quote(configPath)}`;
+      const before = await readOptional(path);
+      changes.push({ harness: h, path, before, after: addStop(before, command) });
+    }
+  }
+
+  if (target.includes('dsh')) {
+    const path = join(home, '.dsh/cordis.patch.yml');
+    const before = await readOptional(path);
+    const marker = '# harness-notify:begin';
+    const plugin = fileURLToPath(new URL('../adapters/dsh.mjs', import.meta.url));
+    const block = `${marker}\n- insert:\n    - id: harness-notify\n      name: ${JSON.stringify(plugin)}\n      config:\n        configPath: ${JSON.stringify(configPath)}\n# harness-notify:end\n`;
+    // YAML 不重序列化，原配置逐字保留；已有同名非托管节点不擅自覆盖。
+    if (before?.includes(marker) && !before.includes(block)) throw new Error('DSH 已有不同的 harness-notify 配置，未覆盖');
+    if (!before?.includes(marker) && /\bid:\s*["']?harness-notify\b/.test(before ?? '')) throw new Error('DSH 已有同名插件节点，未覆盖');
+    changes.push({ harness: 'dsh', path, before, after: before?.includes(marker) ? before : (before ?? '') + (before && !before.endsWith('\n') ? '\n' : '') + '\n' + block });
+  }
+
+  if (target.includes('agy')) {
+    const agyPath = join(home, '.gemini/config/hooks.json');
+    const agyCommand = `${quote(nodePath)} ${quote(cliPath)} hook --harness agy --config ${quote(configPath)}`;
+    const agyBefore = await readOptional(agyPath);
+    changes.push({ harness: 'agy', path: agyPath, before: agyBefore, after: addAgyStop(agyBefore, agyCommand) });
+  }
   const result = [];
   for (const change of changes) {
     const changed = change.before !== change.after;

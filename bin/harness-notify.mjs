@@ -5,13 +5,17 @@ import { join, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { normalize, enrichCodex, enrichClaude, plan, preview, send } from '../lib/notify.mjs';
+import { normalize, enrichCodex, enrichClaude, enrichAgy, plan, preview, send } from '../lib/notify.mjs';
 
-const help = `harness-notify：统一任务完成推送（Bark、Telegram、飞书 CLI、ntfy；Node.js 22+）
+const help = `harness-notify：统一任务完成与消息推送（Bark、Telegram、飞书 CLI、ntfy；Node.js 22+）
   init                    创建私有配置，不覆盖已有文件
-  send --harness NAME --message TEXT [--event-id ID] [--dry-run]
-  hook --harness NAME [JSON] [--dry-run]  也可从 stdin 读取 JSON
-  install-hooks [--dry-run] [--apply]    接入 Codex、Claude Code、DSH
+  send --harness NAME --message TEXT [--title TEXT] [--body TEXT] [--raw] [--dry-run]
+  hook --harness NAME [JSON] [--title TEXT] [--body TEXT] [--raw] [--dry-run]  也可从 stdin 读取 JSON
+  install-hooks [--dry-run] [--apply]    接入 Codex、Claude Code、DSH、Antigravity (AGY)
+  --title, -t TEXT        指定通知标题 (覆盖默认格式)
+  --body, -b TEXT         指定通知正文 (覆盖默认格式)
+  --raw                   纯净模式，不添加路径与完成摘要前缀
+  --cwd PATH              指定工作目录 (留空不输出路径)
   --config PATH           默认 ~/.config/harness-notify/config.json
   --session-title NAME    手动发送或hook覆盖会话窗口名称
   --state-dir PATH        默认 ~/.local/state/harness-notify
@@ -21,10 +25,20 @@ const args = process.argv.slice(2);
 const hook = args[0] === 'hook';
 try {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
-    harness: { type: 'string' }, message: { type: 'string' }, 'event-id': { type: 'string' },
+    harness: { type: 'string' },
+    message: { type: 'string', short: 'm' },
+    title: { type: 'string', short: 't' },
+    body: { type: 'string', short: 'b' },
+    raw: { type: 'boolean' },
+    cwd: { type: 'string' },
+    format: { type: 'string' },
+    'event-id': { type: 'string' },
     'session-title': { type: 'string' },
-    config: { type: 'string' }, 'state-dir': { type: 'string' },
-    'dry-run': { type: 'boolean' }, apply: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
+    config: { type: 'string' },
+    'state-dir': { type: 'string' },
+    'dry-run': { type: 'boolean' },
+    apply: { type: 'boolean' },
+    help: { type: 'boolean', short: 'h' },
   } });
   const command = positionals[0];
   const configPath = values.config ?? process.env.HARNESS_NOTIFY_CONFIG ?? join(process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config'), 'harness-notify/config.json');
@@ -42,7 +56,7 @@ try {
     }
   } else if (command === 'install-hooks') {
     const { installHooks } = await import('../scripts/install-hooks.mjs');
-    print(await installHooks({ apply: values.apply && !values['dry-run'], cliPath: fileURLToPath(import.meta.url), configPath }));
+    print(await installHooks({ apply: values.apply && !values['dry-run'], cliPath: fileURLToPath(import.meta.url), configPath, harness: values.harness }));
   } else if (['hook', 'send'].includes(command)) {
     if (!values.harness || !/^[a-zA-Z0-9_-]{1,40}$/.test(values.harness)) throw new Error('--harness 必须是 1–40 位字母、数字、下划线或连字符');
     let event;
@@ -60,13 +74,32 @@ try {
       let payload;
       try { payload = JSON.parse(input); } catch { throw new Error('hook 输入不是合法 JSON'); }
       if (values['session-title'] !== undefined && payload && typeof payload === 'object') payload.session_title = values['session-title'];
+      if (values.title !== undefined && payload && typeof payload === 'object') payload.title = values.title;
+      if (values.body !== undefined && payload && typeof payload === 'object') payload.body = values.body;
+      if (values.message !== undefined && payload && typeof payload === 'object') payload.message = values.message;
+      if (values.raw !== undefined && payload && typeof payload === 'object') payload.raw = values.raw;
+      if (values.cwd !== undefined && payload && typeof payload === 'object') payload.cwd = values.cwd;
+      if (values.format !== undefined && payload && typeof payload === 'object') payload.format = values.format;
       if (values.harness === 'codex' && payload && typeof payload === 'object') payload = await enrichCodex(payload);
       if (values.harness === 'claude' && payload && typeof payload === 'object') payload = await enrichClaude(payload);
+      if (['agy', 'antigravity-cli'].includes(values.harness) && payload && typeof payload === 'object') payload = await enrichAgy(payload);
       event = normalize(values.harness, payload);
       if (!event) { if (values['dry-run']) print({ dryRun: true, skipped: '非主 agent 完成事件' }); }
     } else {
-      if (!values.message?.trim()) throw new Error('send 需要 --message');
-      event = { harness: values.harness, message: values.message, sessionTitle: values['session-title'], eventId: values['event-id'] ?? randomUUID() };
+      if (!values.message?.trim() && !values.body?.trim() && !values.title?.trim()) {
+        throw new Error('send 需要 --message、--body 或 --title');
+      }
+      event = {
+        harness: values.harness,
+        title: values.title,
+        body: values.body,
+        message: values.message,
+        sessionTitle: values['session-title'] ?? values.title,
+        raw: values.raw,
+        cwd: values.cwd,
+        format: values.format,
+        eventId: values['event-id'] ?? randomUUID()
+      };
     }
     if (event) {
       let config;

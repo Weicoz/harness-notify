@@ -134,12 +134,18 @@ node scripts/install-skill.mjs --apply
 
 ```bash
 harness-notify --help
+# 标准会话通知
 harness-notify send --harness dsh --session-title '发布前检查' --message '检查完成' --event-id 'session-123-turn-4' --dry-run
+# 自定义标题与正文（灵活适配非 agent 场景或自定义格式）
+harness-notify send --title '📧 收到验证码' --body '验证码为 123456' --dry-run
+# 纯净模式（不强制附带路径与完成摘要前缀）
+harness-notify send --harness mailguard --title '系统告警' --body '磁盘使用率超限' --raw --dry-run
 printf '%s' '{"type":"agent-turn-complete","session_id":"s1","turn_id":"t1","cwd":"/你的项目","last_assistant_message":"检查完成"}' \
   | harness-notify hook --harness other --dry-run
 ```
 
-手动 send 未指定 event-id 时每次是新事件。hook 接收 stdin JSON 或单个 JSON 参数；harness 名称允许1–40位字母、数字、下划线、连字符。hook 默认 stdout 为空，失败写 stderr、退出0，不阻断 agent；send 失败退出1。
+手动 send 未指定 event-id 时每次是新事件。支持 `--title` (`-t`)、`--body` (`-b`)、`--raw` 灵活自定义通知外观。若需针对不同 harness 设定固定标题/正文格式，可在 `config.json` 中配置 `templates` 模版字典（支持 `{harness}`, `{title}`, `{sessionTitle}`, `{cwd}`, `{summary}`, `{message}`, `{body}` 占位符）。
+hook 接收 stdin JSON 或单个 JSON 参数；harness 名称允许1–40位字母、数字、下划线、连字符。hook 默认 stdout 为空，失败写 stderr、退出0，不阻断 agent；send 失败退出1。
 
 | 路径 | 覆盖方式 |
 |---|---|
@@ -155,8 +161,9 @@ printf '%s' '{"type":"agent-turn-complete","session_id":"s1","turn_id":"t1","cwd
 | Codex | ~/.codex/config.toml 的 notify；完成后的 agent-turn-complete，通过 JSON 参数 |
 | Claude Code | ~/.claude/settings.json 的 hooks.Stop，通过 stdin；仅主 agent |
 | DSH | ~/.dsh/cordis.patch.yml；适配器监听提交后的 session/event → turn/end，仅 reason.kind=completed 主会话 |
+| Antigravity (AGY) | ~/.gemini/config/hooks.json 的 Stop；完成后的 Stop 事件经 stdin；会话标题读 SQLite、回复取 transcript |
 
-安装器会先备份、保留无关配置，重复运行不添加重复 hook，不删除备份。install-hooks 会接入三套 harness；只授权改某一套时，请合并其单个入口或复用已存在的 hook。
+安装器会先备份、保留无关配置，重复运行不添加重复 hook，不删除备份。install-hooks 会接入四套 harness（Codex、Claude Code、DSH、AGY）；只授权改某一套时，请合并其单个入口或复用已存在的 hook。
 
 Codex 会串联原 notify：`adapters/codex-notify.mjs` 先调用原程序，再调用统一通知；原命令数组存私有 `codex-forward.json`。两方失败互不阻断。自动处理双引号命令数组及末尾逗号；复杂 TOML 拒绝猜改。没有原 notify 时可手工设：
 
@@ -181,6 +188,21 @@ DSH 适配器核对过0.2.0-rc.2事件 API，全局 patch 覆盖加载它的 pro
 ```
 
 `dsh --profile web --dump-config`（或 dsh-tui/headless/web-safe）只查合成树，不启动服务；不要把整个含私有配置的 dump 上传。Desktop profile 由 Electron 应用独占管理，CLI 拒绝 --profile desktop 是管理边界，需在应用自身验证。旧进程是否重载单独核对；不为通知绕过版本限制或修复无关插件。
+
+Antigravity (AGY) 在 `~/.gemini/config/hooks.json` 注册 Stop hook。Stop 事件经 stdin 传入，包含 `conversationId` 与 `transcriptPath`；`harness-notify` 自动从 `conversation_summaries.db` 读取会话标题，并从 `transcript.jsonl`（及 `transcript_full.jsonl`）解析提取最终回复摘要，自动过滤子 agent（`nesting_depth > 0` 或 `parent_conversation_id`）：
+
+```json
+{
+  "harness-notify": {
+    "Stop": [
+      {
+        "command": "harness-notify hook --harness agy",
+        "timeout": 30
+      }
+    ]
+  }
+}
+```
 
 其他 harness 在完成 hook 调用 send，传稳定的 session/turn event-id，或向 hook 传上述通用 JSON。
 

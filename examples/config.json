@@ -30,6 +30,7 @@
     "codex": ["phone"],
     "claude": ["telegram"],
     "dsh": ["feishu"],
+    "agy": ["phone"],
     "*": []
   }
 }
