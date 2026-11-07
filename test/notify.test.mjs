@@ -387,8 +387,11 @@ test('normalize 兼容非 agent-turn 的自定义通知 payload', () => {
   assert.ok(ev.eventId);
 });
 
-test('CLI send 支持 --title 与 --body 参数进行自定义格式推送', async () => {
-  const out = await exec(process.execPath, [cli, 'send', '--harness', 'mailguard', '--title', '测试标题', '--body', '测试正文', '--dry-run']);
+test('CLI send 支持 --title 与 --body 参数进行自定义格式推送', async t => {
+  const dir = await temp(t);
+  const configPath = join(dir, 'config.json');
+  await writeFile(configPath, JSON.stringify(config({ phone: { type: 'bark', deviceKey: 'test-device-key' } }, { mailguard: ['phone'] })));
+  const out = await exec(process.execPath, [cli, 'send', '--config', configPath, '--harness', 'mailguard', '--title', '测试标题', '--body', '测试正文', '--dry-run']);
   const parsed = JSON.parse(out.stdout);
   assert.equal(parsed.title, '测试标题');
   assert.equal(parsed.body, '测试正文');
