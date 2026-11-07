@@ -4,10 +4,12 @@
 
 标题显示 **harness 名称 · 会话窗口名称**，正文只保留 **完整工作路径、完成摘要**。摘要取最终回复摘录，最多 **1000 个 Unicode 字符**；不额外调用模型生成摘要。一轮回复结束不代表测试、部署或业务验收成功。
 
+主仓库：[CNB](https://cnb.cool/jy-project/harness-notify)。保留 [GitHub](https://github.com/Weicoz/harness-notify) 远端；CI 在 CNB 运行语法检查与测试。
+
 ## 安装
 
 ```bash
-git clone https://github.com/Weicoz/harness-notify.git
+git clone https://cnb.cool/jy-project/harness-notify.git
 cd harness-notify
 node scripts/install.mjs
 harness-notify init

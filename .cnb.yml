@@ -1,0 +1,17 @@
+main:
+  push:
+    - docker:
+        image: node:22
+      stages:
+        - name: 语法检查
+          script: npm run check
+        - name: 测试
+          script: npm test
+  pull_request:
+    - docker:
+        image: node:22
+      stages:
+        - name: 语法检查
+          script: npm run check
+        - name: 测试
+          script: npm test
